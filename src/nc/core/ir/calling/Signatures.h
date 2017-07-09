@@ -23,6 +23,7 @@ namespace calling {
  * Signatures of functions and calls to functions.
  */
 class Signatures {
+public:
     /** Mapping from an address to the signature of the function located at this address. */
     boost::unordered_map<ByteAddr, std::shared_ptr<FunctionSignature>> addr2signature_;
 
@@ -32,7 +33,6 @@ class Signatures {
     /** Mapping from a call to its signature. */
     boost::unordered_map<const Call *, std::shared_ptr<CallSignature>> call2signature_;
 
-public:
     /**
      * \param addr Address of a function.
      *

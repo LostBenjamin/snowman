@@ -26,6 +26,7 @@
 #include <nc/config.h>
 
 #include <memory> /* For std::unique_ptr. */
+#include <set>
 
 #include <QObject>
 
@@ -66,6 +67,7 @@ namespace ir {
         class Livenesses;
     }
     namespace vars {
+        class Variable;
         class Variables;
     }
 }
@@ -97,6 +99,11 @@ class Context: public QObject {
     CancellationToken cancellationToken_; ///< Cancellation token.
 
 public:
+    std::set<const ir::vars::Variable *> ifThenVariables_;
+    std::set<const ir::vars::Variable *> ifThenElseVariables_;
+    std::set<const ir::vars::Variable *> switchVariables_;
+    std::set<const ir::vars::Variable *> doWhileVariables_;
+    std::set<const ir::vars::Variable *> whileVariables_;
     /**
      * Class constructor.
      */

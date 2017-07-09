@@ -214,12 +214,17 @@ void MasterAnalyzer::generateTree(Context &context) const {
 
     auto tree = std::make_unique<nc::core::likec::Tree>();
 
-    ir::cgen::CodeGenerator(*tree, *context.image(), *context.functions(), *context.hooks(),
+    ir::cgen::CodeGenerator codeGenerator(*tree, *context.image(), *context.functions(), *context.hooks(),
         *context.signatures(), *context.dataflows(), *context.variables(), *context.graphs(),
-        *context.livenesses(), *context.types(), context.cancellationToken())
-        .makeCompilationUnit();
+        *context.livenesses(), *context.types(), context.cancellationToken());
+    codeGenerator.makeCompilationUnit();
 
     context.setTree(std::move(tree));
+    context.ifThenVariables_ = codeGenerator.ifThenVariables_;
+    context.ifThenElseVariables_ = codeGenerator.ifThenElseVariables_;
+    context.switchVariables_ = codeGenerator.switchVariables_;
+    context.doWhileVariables_ = codeGenerator.doWhileVariables_;
+    context.whileVariables_ = codeGenerator.whileVariables_;
 }
 
 void MasterAnalyzer::decompile(Context &context) const {

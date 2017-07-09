@@ -26,6 +26,7 @@
 #include <nc/config.h>
 
 #include <vector>
+#include <set>
 
 #include <boost/noncopyable.hpp>
 #include <boost/unordered_map.hpp>
@@ -121,7 +122,11 @@ class CodeGenerator: boost::noncopyable {
     boost::unordered_map<const calling::FunctionSignature *, likec::FunctionDeclaration *> signature2declaration_;
 
 public:
-
+    std::set<const ir::vars::Variable *> ifThenVariables_;
+    std::set<const ir::vars::Variable *> ifThenElseVariables_;
+    std::set<const ir::vars::Variable *> switchVariables_;
+    std::set<const ir::vars::Variable *> doWhileVariables_;
+    std::set<const ir::vars::Variable *> whileVariables_;
     /**
      * Constructor.
      *

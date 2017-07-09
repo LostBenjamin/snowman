@@ -197,6 +197,7 @@ private:
      * \return Valid pointer to the generated expression.
      */
     std::unique_ptr<likec::Expression> makeExpression(const cflow::Node *node, likec::Block *block, const BasicBlock *thenBB, const BasicBlock *elseBB, SwitchContext &switchContext);
+    std::unique_ptr<likec::Expression> makeExpression(const cflow::Node *node, likec::Block *block, const BasicBlock *thenBB, const BasicBlock *elseBB, SwitchContext &switchContext, int type);
 
     /**
      * Creates a LikeC statement for given IR statement and sets the pointer to source
@@ -263,6 +264,7 @@ private:
      * \return Valid pointer to the created LikeC expression.
      */
     std::unique_ptr<likec::Expression> makeExpression(const Term *term);
+    std::unique_ptr<likec::Expression> makeExpression(const Term *term, int type);
 
     /**
      * Actually creates a LikeC expression for given term.
@@ -272,6 +274,7 @@ private:
      * \return Valid pointer to the created LikeC expression.
      */
     std::unique_ptr<likec::Expression> doMakeExpression(const Term *term);
+    std::unique_ptr<likec::Expression> doMakeExpression(const Term *term, int type);
 
     /**
      * Actually creates a LikeC expression for a given UnaryOperator.

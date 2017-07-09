@@ -268,7 +268,7 @@ void DefinitionGenerator::makeStatements(const cflow::Node *node, likec::Block *
             assert(region->nodes().size() == 3);
 
             std::unique_ptr<likec::Expression> condition(makeExpression(region->nodes()[0], block,
-                region->nodes()[1]->getEntryBasicBlock(), region->nodes()[2]->getEntryBasicBlock(), switchContext));
+                region->nodes()[1]->getEntryBasicBlock(), region->nodes()[2]->getEntryBasicBlock(), switchContext, cflow::Region::IF_THEN_ELSE));
 
             auto thenBlock = std::make_unique<likec::Block>();
             makeStatements(region->nodes()[1], thenBlock.get(), nextBB, breakBB, continueBB, switchContext);
@@ -285,7 +285,7 @@ void DefinitionGenerator::makeStatements(const cflow::Node *node, likec::Block *
             assert(region->exitBasicBlock() != nullptr);
 
             std::unique_ptr<likec::Expression> condition(makeExpression(region->nodes()[0], block,
-                region->nodes()[1]->getEntryBasicBlock(), region->exitBasicBlock(), switchContext));
+                region->nodes()[1]->getEntryBasicBlock(), region->exitBasicBlock(), switchContext, cflow::Region::IF_THEN));
 
             auto thenBlock = std::make_unique<likec::Block>();
             makeStatements(region->nodes()[1], thenBlock.get(), nextBB, breakBB, continueBB, switchContext);
@@ -318,7 +318,7 @@ void DefinitionGenerator::makeStatements(const cflow::Node *node, likec::Block *
 
             auto condition = makeExpression(region->entry(), nullptr,
                 region->entry()->uniqueSuccessor()->getEntryBasicBlock(),
-                region->exitBasicBlock(), switchContext);
+                region->exitBasicBlock(), switchContext, cflow::Region::WHILE);
 
             cflow::Dfs dfs(region);
             auto &nodes = dfs.preordering();
@@ -358,7 +358,7 @@ void DefinitionGenerator::makeStatements(const cflow::Node *node, likec::Block *
             auto condition = makeExpression(region->loopCondition(), body.get(),
                 region->entry()->getEntryBasicBlock(),
                 region->exitBasicBlock(),
-                switchContext);
+                switchContext, cflow::Region::DO_WHILE);
 
             block->addStatement(std::make_unique<likec::DoWhile>(std::move(body), std::move(condition)));
 
@@ -430,7 +430,7 @@ void DefinitionGenerator::makeStatements(const cflow::Node *node, likec::Block *
             auto expression = std::make_unique<likec::Typecast>(
                 likec::Typecast::REINTERPRET_CAST,
                 newSwitchContext.valueType(),
-                makeExpression(witch->switchTerm()));
+                makeExpression(witch->switchTerm(), cflow::Region::SWITCH));
 
             /*
              * Generate the body of the switch.
@@ -576,6 +576,106 @@ std::unique_ptr<likec::Expression> DefinitionGenerator::makeExpression(const cfl
         } else if (j->thenTarget().basicBlock() == elseBB || j->elseTarget().basicBlock() == elseBB) {
             auto left  = makeExpression(region->nodes()[0], block, region->nodes()[1]->getEntryBasicBlock(), elseBB, switchContext);
             auto right = makeExpression(region->nodes()[1], nullptr, thenBB, elseBB, switchContext);
+
+            result = std::make_unique<likec::BinaryOperator>(likec::BinaryOperator::LOGICAL_AND,
+                std::move(left), std::move(right));
+        } else {
+            assert(!"First component of compound condition must contain a jump to thenBB or elseBB.");
+        }
+    } else {
+        assert(!"Node must be a basic block node or a region.");
+    }
+
+    assert(result != nullptr && "Something is very wrong.");
+
+    return result;
+}
+
+std::unique_ptr<likec::Expression> DefinitionGenerator::makeExpression(const cflow::Node *node, likec::Block *block, const BasicBlock *thenBB, const BasicBlock *elseBB, SwitchContext &switchContext, int type) {
+    assert(node != nullptr);
+    assert(thenBB != nullptr);
+    assert(elseBB != nullptr);
+    assert(node->isCondition() && "Can only generate expressions from condition nodes.");
+
+    std::unique_ptr<likec::Expression> result;
+
+    if (const cflow::BasicNode *basicNode = node->as<cflow::BasicNode>()) {
+        if (block) {
+            addLabels(basicNode->basicBlock(), block, switchContext);
+        }
+
+        foreach (const ir::Statement *statement, basicNode->basicBlock()->statements()) {
+            std::unique_ptr<likec::Expression> expression;
+
+            if (const Jump *jump = statement->asJump()) {
+                assert(jump == basicNode->basicBlock()->getJump());
+
+                expression = makeExpression(jump->condition(), type);
+
+                assert((jump->thenTarget().basicBlock() == thenBB && jump->elseTarget().basicBlock() == elseBB) ||
+                       (jump->thenTarget().basicBlock() == elseBB && jump->elseTarget().basicBlock() == thenBB));
+
+                if (jump->thenTarget().basicBlock() != thenBB) {
+                    expression = std::make_unique<likec::UnaryOperator>(likec::UnaryOperator::LOGICAL_NOT,
+                                                                        std::move(expression));
+                }
+            } else if (auto stmt = makeStatement(statement, nullptr, nullptr, nullptr)) {
+                if (block) {
+                    block->addStatement(std::move(stmt));
+                } else if (likec::ExpressionStatement *expressionStatement = stmt->as<likec::ExpressionStatement>()) {
+                    expression = expressionStatement->releaseExpression();
+                }
+            }
+
+            if (expression) {
+                if (!result) {
+                    result = std::move(expression);
+                } else {
+                    result = std::make_unique<likec::BinaryOperator>(likec::BinaryOperator::COMMA,
+                        std::move(result), std::move(expression));
+                }
+            }
+        }
+    } else if (const cflow::Region *region = node->as<cflow::Region>()) {
+        assert(region->regionKind() == cflow::Region::COMPOUND_CONDITION);
+        assert(region->nodes().size() == 2);
+
+        /*
+         * Distinguishing AND from OR:
+         *
+         * if (a || b) { then } { else }
+         *
+         * a -> then || b
+         * b -> then || else
+         *
+         * if (a && b) { then } { else }
+         *
+         * a -> b || else
+         * b -> then || else
+         */
+
+        const cflow::Node *n = region->nodes()[0];
+        while (const cflow::Region *r = n->as<cflow::Region>()) {
+            assert(r->regionKind() == cflow::Region::COMPOUND_CONDITION);
+            assert(r->nodes().size() == 2);
+            n = r->nodes()[1];
+        }
+
+        const cflow::BasicNode *b = n->as<cflow::BasicNode>();
+        assert(b != nullptr);
+
+        const Jump *j = b->basicBlock()->getJump();
+        assert(j != nullptr);
+
+        if (j->thenTarget().basicBlock() == thenBB || j->elseTarget().basicBlock() == thenBB) {
+            auto left  = makeExpression(region->nodes()[0], block, thenBB, region->nodes()[1]->getEntryBasicBlock(), switchContext, type);
+            auto right = makeExpression(region->nodes()[1], nullptr, thenBB, elseBB, switchContext, type);
+
+            result = std::make_unique<likec::BinaryOperator>(likec::BinaryOperator::LOGICAL_OR,
+                std::move(left), std::move(right));
+        } else if (j->thenTarget().basicBlock() == elseBB || j->elseTarget().basicBlock() == elseBB) {
+            auto left  = makeExpression(region->nodes()[0], block, region->nodes()[1]->getEntryBasicBlock(), elseBB, switchContext, type);
+            auto right = makeExpression(region->nodes()[1], nullptr, thenBB, elseBB, switchContext, type);
 
             result = std::make_unique<likec::BinaryOperator>(likec::BinaryOperator::LOGICAL_AND,
                 std::move(left), std::move(right));
@@ -802,6 +902,36 @@ std::unique_ptr<likec::Expression> DefinitionGenerator::makeExpression(const Ter
     return result;
 }
 
+std::unique_ptr<likec::Expression> DefinitionGenerator::makeExpression(const Term *term, int type) {
+    assert(term != nullptr);
+
+    auto result = doMakeExpression(term, type);
+    assert(result != nullptr);
+
+    class TermSetter {
+        const ir::Term *term_;
+
+    public:
+        TermSetter(const ir::Term *term): term_(term) {
+            assert(term != nullptr);
+        }
+
+        void operator()(likec::TreeNode *node) {
+            if (auto expression = node->as<likec::Expression>()) {
+                if (expression->term() == nullptr) {
+                    expression->setTerm(term_);
+                    expression->callOnChildren(*this);
+                }
+            }
+        }
+    };
+
+    TermSetter setter(term);
+    setter(result.get());
+
+    return result;
+}
+
 std::unique_ptr<likec::Expression> DefinitionGenerator::doMakeExpression(const Term *term) {
 #ifdef NC_PREFER_CONSTANTS_TO_EXPRESSIONS
     if (term->isRead()) {
@@ -812,6 +942,86 @@ std::unique_ptr<likec::Expression> DefinitionGenerator::doMakeExpression(const T
         }
     }
 #endif
+
+    if (term->isRead()) {
+        if (const Term *substitute = getSubstitute(term)) {
+            return makeExpression(substitute);
+        }
+    }
+
+    if (parent().variables().getVariable(term)) {
+        return makeVariableAccess(term);
+    }
+
+    switch (term->kind()) {
+        case Term::INT_CONST: {
+            return makeConstant(term, term->asConstant()->value());
+        }
+        case Term::INTRINSIC: {
+            return doMakeExpression(term->as<Intrinsic>());
+        }
+        case Term::MEMORY_LOCATION_ACCESS: {
+            assert(!"The term must belong to a variable.");
+            return nullptr;
+        }
+        case Term::DEREFERENCE: {
+            assert(!dataflow_.getMemoryLocation(term) && "The term must belong to a variable.");
+
+            auto dereference = term->asDereference();
+            auto type = parent().types().getType(dereference);
+            auto addressType = parent().types().getType(dereference->address());
+
+            return std::make_unique<likec::UnaryOperator>(likec::UnaryOperator::DEREFERENCE,
+                std::make_unique<likec::Typecast>(
+                    likec::Typecast::REINTERPRET_CAST,
+                    tree().makePointerType(addressType->size(), parent().makeType(type)),
+                    makeExpression(dereference->address())));
+        }
+        case Term::UNARY_OPERATOR: {
+            return doMakeExpression(term->asUnaryOperator());
+        }
+        case Term::BINARY_OPERATOR: {
+            return doMakeExpression(term->asBinaryOperator());
+        }
+        default: {
+            unreachable();
+            return nullptr;
+        }
+    }
+}
+
+std::unique_ptr<likec::Expression> DefinitionGenerator::doMakeExpression(const Term *term, int type) {
+#ifdef NC_PREFER_CONSTANTS_TO_EXPRESSIONS
+    if (term->isRead()) {
+        const dflow::Value *value = dataflow_.getValue(term);
+
+        if (value->abstractValue().isConcrete()) {
+            return makeConstant(term, value->abstractValue().asConcrete());
+        }
+    }
+#endif
+
+    if (parent().variables().getVariable(term)) {
+        const vars::Variable* variable = parent().variables().getVariable(term);
+        switch(type) {
+            case cflow::Region::IF_THEN_ELSE:
+                parent().ifThenElseVariables_.insert(variable);
+                break;
+            case cflow::Region::IF_THEN:
+                parent().ifThenVariables_.insert(variable);
+                break;
+            case cflow::Region::WHILE:
+                parent().whileVariables_.insert(variable);
+                break;
+            case cflow::Region::DO_WHILE:
+                parent().doWhileVariables_.insert(variable);
+                break;
+            case cflow::Region::SWITCH:
+                parent().switchVariables_.insert(variable);
+                break;
+            default: break;
+        }
+    }
 
     if (term->isRead()) {
         if (const Term *substitute = getSubstitute(term)) {
